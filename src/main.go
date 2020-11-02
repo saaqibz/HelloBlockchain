@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
@@ -17,11 +19,13 @@ import (
 )
 
 type Block struct {
-	Index     int
-	Timestamp string
-	BPM       int
-	Hash      string
-	PrevHash  string
+	Index      int
+	Timestamp  string
+	BPM        int
+	Hash       string
+	PrevHash   string
+	Difficulty int
+	Nonce      string
 }
 
 type Message struct {
@@ -29,9 +33,11 @@ type Message struct {
 }
 
 var Blockchain []Block
+var mutex = &sync.Mutex{}
+var difficulty = 2
 
-func calculateHash(b *Block) string{
-	msg := string(b.Index) + b.Timestamp + string(b.BPM) + b.PrevHash
+func calculateHash(b *Block) string {
+	msg := string(b.Index) + b.Timestamp + string(b.BPM) + b.PrevHash + b.Nonce + string(b.Difficulty)
 	h := sha256.New()
 	h.Write([]byte(msg))
 	hashed := h.Sum(nil)
@@ -40,17 +46,37 @@ func calculateHash(b *Block) string{
 
 func generateBlock(oldBlock Block, bpm int) (Block, error) {
 	block := Block{
-		Index:     oldBlock.Index + 1,
-		Timestamp: time.Now().String(),
-		BPM:       bpm,
-		PrevHash:  oldBlock.Hash,
+		Index:      oldBlock.Index + 1,
+		Timestamp:  time.Now().String(),
+		BPM:        bpm,
+		PrevHash:   oldBlock.Hash,
+		Difficulty: difficulty,
 	}
+
+	mineBlock(&block)
+
 	block.Hash = calculateHash(&block)
 	return block, nil
 }
 
+func mineBlock(b *Block) {
+	for i := 0; ; i++ {
+		b.Nonce = fmt.Sprintf("%d", i)
+		b.Hash = calculateHash(b)
+		if isHashValid(b) {
+			log.Println("Mined a block!")
+			return
+		}
+		time.Sleep(25 * time.Millisecond) // slow down the processing
+		fmt.Printf(". ")
+		if i%100 == 0 {
+			log.Printf("Failed Attempt %s\n", spew.Sdump(b))
+		}
+	}
+}
+
 func isBlockValid(curr *Block, prev *Block) bool {
-	return curr.Index == prev.Index + 1 &&
+	return curr.Index == prev.Index+1 &&
 		curr.PrevHash == prev.Hash &&
 		calculateHash(curr) == curr.Hash
 }
@@ -59,6 +85,12 @@ func replaceChain(newBlocks []Block) {
 	if len(newBlocks) > len(Blockchain) {
 		Blockchain = newBlocks
 	}
+}
+
+// POW
+func isHashValid(b *Block) bool {
+	prefix := strings.Repeat("0", b.Difficulty)
+	return strings.HasPrefix(b.Hash, prefix)
 }
 
 // Webserver
@@ -106,16 +138,18 @@ func handleWriteBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	oldBlock := Blockchain[len(Blockchain) - 1]
+	oldBlock := Blockchain[len(Blockchain)-1]
+	mutex.Lock()
 	newBlock, err := generateBlock(oldBlock, m.BPM)
+	mutex.Unlock()
 	if err != nil {
 		respondWithJSON(w, r, http.StatusInternalServerError, m)
 		return
 	}
 	if isBlockValid(&newBlock, &oldBlock) {
 		newBlockchain := append(Blockchain, newBlock)
-		replaceChain(newBlockchain)
-		spew.Dump(Blockchain)
+		Blockchain = newBlockchain
+		spew.Dump(newBlockchain)
 	} else {
 		fmt.Println("Invalid Block: %s", spew.Sdump(newBlock))
 		respondWithJSON(w, r, http.StatusBadRequest, m)
@@ -136,7 +170,7 @@ func respondWithJSON(w http.ResponseWriter, r *http.Request, code int, payload i
 	w.Write(response)
 }
 
-func main(){
+func main() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal(err)
@@ -144,9 +178,14 @@ func main(){
 
 	go func() {
 		t := time.Now()
-		genesisBlock := Block{0, t.String(), 0, "", ""}
+		genesisBlock := Block{
+			Timestamp:  t.String(),
+			Difficulty: difficulty,
+		}
 		spew.Dump(genesisBlock)
+		mutex.Lock()
 		Blockchain = append(Blockchain, genesisBlock)
+		mutex.Unlock()
 	}()
 	log.Fatal(run())
 }
