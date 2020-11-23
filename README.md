@@ -4,7 +4,7 @@ Learn how blockchains work by implementing one.
 
 Following the guides found here:
 
-### Inital Chain:
+### Initial Chain:
 https://medium.com/@mycoralhealth/code-your-own-blockchain-in-less-than-200-lines-of-go-e296282bcffc
 
 ### Proof of work (POW):
